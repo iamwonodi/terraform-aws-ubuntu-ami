@@ -9,17 +9,10 @@
 # that should be common to multiple workloads:
 #
 # - Updated Ubuntu packages
-# - Git
-# - jq
-# - unzip
-# - tar
-# - gzip
-# - curl
-# - wget
-# - nano
-# - Docker
-# - AWS CLI v2
 # - /opt directory preparation
+# - preconfigured packages
+# - custom provided package
+# - docker, aws-cli and python when enabled
 #
 # Application code, database configuration, secrets, service-specific scripts,
 # Docker images, and workload-specific configuration remain caller-owned.
@@ -38,7 +31,15 @@
 # IMPORTANT:
 # Ubuntu uses apt rather than dnf, and the default Ubuntu administrative user
 # is normally "ubuntu". Therefore this component intentionally uses apt and
-# configures Docker access for the ubuntu user.
+# configures Docker access for the ubuntu user if docker is enabled.
+#
+# The actual commands are assembled in locals.tf from:
+#
+# - enable_predefined_packages
+# - enable_docker
+# - enable_aws_cli
+# - custom_build_commands
+# - custom_validate_commands
 ################################################################################
 
 resource "aws_imagebuilder_component" "base" {
@@ -52,179 +53,14 @@ resource "aws_imagebuilder_component" "base" {
     description   = "Installs common software required by platform compute instances."
     schemaVersion = 1.0
 
-    phases = [
-      ############################################################################
-      # BUILD PHASE
-      #
-      # Installs and configures the software that should exist on every compute
-      # instance created from this golden AMI.
-      ############################################################################
-      {
-        name = "build"
-
-        steps = [
-          {
-            name      = "UpdateSystemPackages"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "export DEBIAN_FRONTEND=noninteractive",
-                "apt-get update -y",
-                "apt-get upgrade -y"
-              ]
-            }
-          },
-
-          {
-            name      = "InstallBasePackages"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "export DEBIAN_FRONTEND=noninteractive",
-                "apt-get install -y git jq unzip tar gzip curl wget nano ca-certificates gnupg lsb-release"
-              ]
-            }
-          },
-
-          {
-            name      = "InstallDocker"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "install -m 0755 -d /etc/apt/keyrings",
-                "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc",
-                "chmod a+r /etc/apt/keyrings/docker.asc",
-                "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $$(. /etc/os-release && echo $${UBUNTU_CODENAME:-$$VERSION_CODENAME}) stable\" > /etc/apt/sources.list.d/docker.list",
-                "apt-get update -y",
-                "apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-                "systemctl enable docker",
-                "systemctl start docker",
-                "usermod -aG docker ubuntu"
-              ]
-            }
-          },
-
-          {
-            name      = "InstallAWSCLI"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip",
-                "rm -rf /tmp/aws",
-                "unzip -q /tmp/awscliv2.zip -d /tmp",
-                "/tmp/aws/install",
-                "rm -rf /tmp/aws /tmp/awscliv2.zip"
-              ]
-            }
-          },
-
-          {
-            name      = "PrepareComputeDirectories"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "mkdir -p /opt",
-                "chmod 755 /opt"
-              ]
-            }
-          }
-        ]
-      },
-
-      ############################################################################
-      # VALIDATE PHASE
-      #
-      # Confirms that the software installed during the build phase is available
-      # before Image Builder creates the final AMI.
-      ############################################################################
-      {
-        name = "validate"
-
-        steps = [
-          {
-            name      = "ValidateDocker"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "docker --version",
-                "docker compose version",
-                "systemctl is-enabled docker"
-              ]
-            }
-          },
-
-          {
-            name      = "ValidateAWSCLI"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "aws --version"
-              ]
-            }
-          },
-
-          {
-            name      = "ValidateNano"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "nano --version"
-              ]
-            }
-          },
-
-          {
-            name      = "ValidateBasePackages"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "git --version",
-                "jq --version",
-                "curl --version"
-              ]
-            }
-          },
-
-          {
-            name      = "ValidateUbuntu"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "test -f /etc/os-release",
-                "grep -q 'Ubuntu' /etc/os-release"
-              ]
-            }
-          }
-        ]
-      }
-    ]
+    phases = local.component_phases
   })
 
   tags = merge(
     local.common_tags,
     {
       Name = local.component_name
-      Type = "Base AMI Component"
+      Type = "Ubuntu AMI Component"
     }
   )
 }

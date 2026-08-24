@@ -168,6 +168,86 @@ variable "security_group_ids" {
   }
 }
 
+################################################################################
+# PREDEFINED SOFTWARE
+################################################################################
+
+variable "enable_predefined_packages" {
+  type        = bool
+  description = "When true, installs the module's predefined Ubuntu package set: git, jq, unzip, tar, gzip, curl, wget, nano, ca-certificates, gnupg, and lsb-release."
+  default     = true
+}
+
+variable "enable_docker" {
+  type        = bool
+  description = "When true, installs Docker Engine, Docker CLI, containerd, Docker Buildx, and Docker Compose from the official Docker Ubuntu repository."
+  default     = false
+}
+
+variable "enable_aws_cli" {
+  type        = bool
+  description = "When true, installs AWS CLI version 2 using the official AWS CLI installer."
+  default     = false
+}
+
+variable "enable_python" {
+  type        = bool
+  description = "When true, installs Python 3 and the Python 3 package manager."
+  default     = false
+}
+
+
+################################################################################
+# CUSTOM COMPONENT COMMANDS
+################################################################################
+
+variable "custom_build_commands" {
+  type = list(string)
+
+  description = <<-EOT
+    Additional Bash commands supplied by the caller and executed during the
+    Image Builder build phase after all enabled predefined software has been
+    installed.
+
+    Use this variable for workload-specific or organization-specific software
+    that should not be maintained as part of the module's predefined software
+    groups.
+  EOT
+
+  default = []
+
+  validation {
+    condition = alltrue([
+      for command in var.custom_build_commands :
+      trimspace(command) != ""
+    ])
+
+    error_message = "custom_build_commands must contain only non-empty commands."
+  }
+}
+
+variable "custom_validate_commands" {
+  type = list(string)
+
+  description = <<-EOT
+    Additional Bash commands supplied by the caller and executed during the
+    Image Builder validation phase after the enabled predefined software has
+    been validated.
+
+    Use this variable to verify caller-specific software or configuration.
+  EOT
+
+  default = []
+
+  validation {
+    condition = alltrue([
+      for command in var.custom_validate_commands :
+      trimspace(command) != ""
+    ])
+
+    error_message = "custom_validate_commands must contain only non-empty commands."
+  }
+}
 
 ################################################################################
 # BUILD
