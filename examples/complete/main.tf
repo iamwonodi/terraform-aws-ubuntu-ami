@@ -1,15 +1,10 @@
 ################################################################################
-
 # UBUNTU AMI - COMPLETE EXAMPLE
-
 #
-
-# This example demonstrates how a caller can selectively enable the software
-
-# provided by the Ubuntu AMI module while also supplying custom Image Builder
-
-# commands.
-
+# This module is a thin wrapper around the generic ami-builder module. This
+# example demonstrates the Ubuntu-specific software toggles this wrapper
+# adds, while also passing through a couple of ami-builder's own fields
+# (logging, key_pair) to show they still work end to end.
 ################################################################################
 
 module "ubuntu_ami" {
@@ -19,9 +14,15 @@ module "ubuntu_ami" {
   environment  = var.environment
 
   ##############################################################################
+  # BUILD LOGGING AND DEBUG ACCESS (pass through to ami-builder)
+  ##############################################################################
 
+  logging_s3_bucket_name = var.logging_bucket_name
+  logging_s3_key_prefix  = "ubuntu-ami-logs"
+  key_pair               = var.key_pair
+
+  ##############################################################################
   # PARENT UBUNTU IMAGE
-
   ##############################################################################
 
   parent_image = var.parent_image

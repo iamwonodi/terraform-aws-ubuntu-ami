@@ -1,4 +1,3 @@
-
 ################################################################################
 # CORE IDENTIFICATION
 ################################################################################
@@ -25,6 +24,46 @@ variable "environment" {
   }
 }
 
+variable "image_name" {
+  type        = string
+  description = "Distinguishing name segment used in every Image Builder resource this module creates, passed through to ami-builder. Lets more than one AMI-producing module instance coexist within the same project_name/environment without colliding on AWS resource names."
+  default     = "ubuntu"
+
+  validation {
+    condition     = trimspace(var.image_name) != ""
+    error_message = "image_name must not be empty."
+  }
+}
+
+################################################################################
+# COMPONENT DESCRIPTIONS
+#
+# Ubuntu-flavored defaults -- override if a different description is wanted.
+# This is the one place this module supplies its own opinion on top of what
+# ami-builder otherwise leaves entirely to the caller.
+################################################################################
+
+variable "component_description" {
+  type        = string
+  description = "Description assigned to the Image Builder component."
+  default     = "Installs common software required by platform compute instances."
+
+  validation {
+    condition     = trimspace(var.component_description) != ""
+    error_message = "component_description must not be empty."
+  }
+}
+
+variable "ami_description" {
+  type        = string
+  description = "Description assigned to the resulting AMI."
+  default     = "Ubuntu golden base AMI for platform compute workloads."
+
+  validation {
+    condition     = trimspace(var.ami_description) != ""
+    error_message = "ami_description must not be empty."
+  }
+}
 
 ################################################################################
 # BASE IMAGE
@@ -39,7 +78,6 @@ variable "parent_image" {
     error_message = "parent_image must not be empty."
   }
 }
-
 
 ################################################################################
 # VERSIONING
@@ -75,7 +113,6 @@ variable "recipe_version" {
   }
 }
 
-
 ################################################################################
 # STORAGE
 ################################################################################
@@ -105,7 +142,6 @@ variable "root_volume_type" {
     error_message = "root_volume_type must be either gp3 or gp2."
   }
 }
-
 
 ################################################################################
 # BUILD INFRASTRUCTURE
@@ -168,8 +204,59 @@ variable "security_group_ids" {
   }
 }
 
+variable "key_pair" {
+  type        = string
+  description = "Optional EC2 key pair name for SSH access to the temporary build instance, useful for debugging a failed build."
+  default     = null
+}
+
+variable "logging_s3_bucket_name" {
+  type        = string
+  description = "Optional S3 bucket where Image Builder uploads build logs. Required together with logging_s3_key_prefix to enable build logging."
+  default     = null
+}
+
+variable "logging_s3_key_prefix" {
+  type        = string
+  description = "S3 key prefix under which build logs are stored, when logging_s3_bucket_name is set."
+  default     = null
+}
+
+variable "resource_tags" {
+  type        = map(string)
+  description = "Tags Image Builder applies to resources it creates during the build itself (the temporary EC2 instance, snapshots) -- distinct from tags, which apply to the Image Builder resources this module manages."
+  default     = {}
+}
+
+variable "sns_topic_arn" {
+  type        = string
+  description = "Optional SNS topic ARN Image Builder publishes build and pipeline events to."
+  default     = null
+}
+
+variable "placement_tenancy" {
+  type        = string
+  description = "Optional tenancy for the temporary build instance."
+  default     = null
+
+  validation {
+    condition     = var.placement_tenancy == null || contains(["default", "dedicated", "host"], var.placement_tenancy)
+    error_message = "placement_tenancy must be default, dedicated, or host."
+  }
+}
+
+variable "placement_availability_zone" {
+  type        = string
+  description = "Optional Availability Zone for the temporary build instance."
+  default     = null
+}
+
 ################################################################################
 # PREDEFINED SOFTWARE
+#
+# This is the module's actual value-add over calling ami-builder directly:
+# curated, toggled Ubuntu software groups, translated into plain build/
+# validate commands that ami-builder's generic interface accepts.
 ################################################################################
 
 variable "enable_predefined_packages" {
@@ -195,7 +282,6 @@ variable "enable_python" {
   description = "When true, installs Python 3 and the Python 3 package manager."
   default     = false
 }
-
 
 ################################################################################
 # CUSTOM COMPONENT COMMANDS
@@ -262,10 +348,14 @@ variable "build_image" {
 variable "build_trigger" {
   type        = string
   description = "Optional caller-controlled value used to request a new AMI build. Change this value when an explicit manual build is required."
-
-  default = ""
+  default     = ""
 }
 
+variable "enhanced_image_metadata_enabled" {
+  type        = bool
+  description = "Whether Image Builder collects additional metadata about the image being created. Only takes effect when build_image is true."
+  default     = true
+}
 
 ################################################################################
 # PIPELINE
@@ -304,7 +394,6 @@ variable "image_test_timeout_minutes" {
     error_message = "image_test_timeout_minutes must be at least 1 minute."
   }
 }
-
 
 ################################################################################
 # TAGGING

@@ -1,587 +1,180 @@
 # Terraform AWS Ubuntu AMI
 
-Reusable Terraform module for building a standardized Ubuntu-based golden AMI using AWS EC2 Image Builder.
+A thin, opinionated wrapper around the generic `terraform-aws-ami-builder` module, providing curated Ubuntu software toggles on top of it: predefined packages, Docker, AWS CLI, and Python -- plus an unconditional OS baseline (system update, `/opt` preparation, Ubuntu identity validation).
 
-The module provides a reusable Ubuntu compute foundation while allowing the caller to decide which optional software should be installed.
-
-The module does not contain workload-specific application configuration.
+This module owns no AWS resources of its own. Every `aws_imagebuilder_*` resource is created by `ami-builder`; this module's entire job is translating Ubuntu-specific toggles into the plain build/validate commands `ami-builder`'s generic interface accepts.
 
 ---
 
-## Design
-
-The module follows this boundary:
+# Architecture
 
 ```text
-                 Caller
-                   │
-                   │
-        ┌──────────▼──────────┐
-        │    Ubuntu AMI       │
-        │      Module         │
-        │                     │
-        │ Ubuntu parent image │
-        │ OS updates         │
-        │ Optional packages  │
-        │ Optional Docker    │
-        │ Optional AWS CLI   │
-        │ Optional Python    │
-        │ Custom commands     │
-        │ Validation          │
-        └──────────┬──────────┘
-                   │
-                   ▼
-             Golden Ubuntu AMI
-                   │
-          ┌────────┼────────┐
-          ▼        ▼        ▼
-       Compute   Database  Other
-       Workload  Workload  Workload
+Caller
+   |
+   v
+terraform-aws-ubuntu-ami
+   |
+   | translates enable_docker / enable_aws_cli / enable_python /
+   | enable_predefined_packages / custom_build_commands into
+   | component_build_commands / component_validate_commands
+   |
+   v
+terraform-aws-ami-builder  <-- owns every AWS Image Builder resource
 ```
 
-The resulting AMI should contain only software and configuration that is appropriate for the workloads that will consume it.
+Prior to this design, `ubuntu-ami` duplicated all seven of `ami-builder`'s resources with Ubuntu-specific values hardcoded in. That meant any correctness fix or new AWS Image Builder capability had to be applied twice, in two repos, and the two inevitably drifted. This module now delegates entirely, so `ami-builder` is the only place Image Builder resource logic lives.
+
+---
+
+# Requirements
+
+| Name         | Version              |
+| ------------ | ---------------------- |
+| Terraform    | `>= 1.6.0`             |
+| AWS provider | `>= 6.0, < 7.0`        |
+
+This module itself creates no AWS resources, so its own provider constraint is nominal; what actually matters is `ami-builder`'s constraint, inherited through the module call below.
+
+---
+
+# Usage
+
+```hcl
+module "ubuntu_ami" {
+  source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.0"
+
+  project_name = "myapp"
+  environment  = "production"
+
+  parent_image = "ami-0abcdef1234567890"  # an existing Ubuntu 24.04 AMI
+
+  enable_docker  = true
+  enable_aws_cli = true
+
+  instance_types         = ["t3.medium"]
+  instance_profile_name = module.profile.instance_profile_name
+  subnet_id               = module.vpc.build_subnet_id
+  security_group_ids      = [module.build_sg.security_group_id]
+
+  build_image = true
+}
+```
+
+See `examples/complete` for a fuller example.
 
 ---
 
 # Software Provisioning
 
-Optional software is controlled by boolean variables.
-
 ## Predefined Packages
 
-Enable with:
-
 ```hcl
-enable_predefined_packages = true
+enable_predefined_packages = true  # default
 ```
 
-The module installs:
-
-| Package           | Purpose                                     |
-| ----------------- | ------------------------------------------- |
-| `git`             | Source-control operations                   |
-| `jq`              | JSON processing from shell scripts          |
-| `unzip`           | Extract ZIP archives                        |
-| `tar`             | Archive extraction and creation             |
-| `gzip`            | Compression/decompression                   |
-| `curl`            | HTTP/HTTPS requests and software downloads  |
-| `wget`            | HTTP/HTTPS downloads                        |
-| `nano`            | Terminal text editor                        |
-| `ca-certificates` | Trusted CA certificates for TLS             |
-| `gnupg`           | GPG signature and repository-key operations |
-| `lsb-release`     | Linux distribution metadata                 |
-
-These packages are installed only when:
-
-```hcl
-enable_predefined_packages = true
-```
-
----
+Installs: `git`, `jq`, `unzip`, `tar`, `gzip`, `curl`, `wget`, `nano`, `ca-certificates`, `gnupg`, `lsb-release`.
 
 ## Docker
 
-Enable with:
-
 ```hcl
-enable_docker = true
+enable_docker = false  # default
 ```
 
-The module installs:
-
-```text
-Docker Engine
-Docker CLI
-containerd
-Docker Buildx
-Docker Compose
-```
-
-Docker is installed from Docker's official Ubuntu package repository.
-
-The Ubuntu user is added to the `docker` group.
-
----
+Installs Docker Engine, Docker CLI, containerd, Docker Buildx, and Docker Compose from Docker's official Ubuntu repository (not Ubuntu's own distribution package), and adds the `ubuntu` user to the `docker` group.
 
 ## AWS CLI
 
-Enable with:
-
 ```hcl
-enable_aws_cli = true
+enable_aws_cli = false  # default
 ```
 
-The module installs AWS CLI version 2.
-
-The CLI is installed from the official AWS CLI distribution.
-
----
+Installs AWS CLI v2 via the official AWS installer.
 
 ## Python
 
-Enable with:
-
 ```hcl
-enable_python = true
+enable_python = false  # default
 ```
 
-The module installs:
-
-```text
-python3
-python3-pip
-python3-venv
-```
-
-This provides Python execution, Python package installation, and isolated Python virtual environments.
-
-Python is disabled by default because not every compute workload requires it.
+Installs Python 3, `pip`, and `venv` support.
 
 ---
 
 # Fixed Build Steps
 
-Some operations remain controlled by the module because they establish the minimum Ubuntu image lifecycle.
+These run unconditionally, regardless of any toggle above -- they're not optional software, they're baseline setup and verification for every AMI this module produces:
 
-## Operating-System Update
-
-The module performs:
-
-```bash
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get upgrade -y
-```
-
-This step is always executed.
-
-It is not exposed as a caller-controlled switch because updating the operating system is part of creating the standardized image.
+* **OS update** -- `apt-get update && apt-get upgrade`, always first.
+* **`/opt` preparation** -- creates `/opt` with `755` permissions, for workload-specific installs that land on the AMI later.
+* **Ubuntu identity validation** -- confirms `/etc/os-release` actually identifies the built AMI as Ubuntu, always the first validation step.
 
 ---
 
-## `/opt` Directory
-
-The module creates:
-
-```text
-/opt
-```
-
-with permissions:
-
-```text
-755
-```
-
-This step is always executed.
-
-The directory provides a predictable location for software and platform files that may be installed by consuming workloads.
-
----
-
-# Ubuntu Validation
-
-The module always validates that the parent image is Ubuntu:
-
-```bash
-test -f /etc/os-release
-grep -q 'Ubuntu' /etc/os-release
-```
-
-If this validation fails, Image Builder stops the build.
-
-This prevents the Ubuntu-specific component from silently being applied to an incompatible operating system.
-
----
-
-# Custom Build Commands
-
-The caller can provide additional build commands:
+# Custom Commands
 
 ```hcl
 custom_build_commands = [
-  "apt-get install -y htop",
-  "mkdir -p /opt/my-platform"
+  "curl -fsSL https://example.com/install.sh | bash"
 ]
-```
 
-These commands are added after the module-managed software installation steps.
-
-Use this for software that is specific to the caller's platform but still belongs in the golden AMI.
-
-Avoid placing application deployment, secrets, database data, or workload-specific runtime state inside the AMI.
-
----
-
-# Custom Validation Commands
-
-The caller can also provide validation commands:
-
-```hcl
 custom_validate_commands = [
-  "htop --version",
-  "test -d /opt/my-platform"
+  "my-tool --version"
 ]
 ```
 
-These commands execute during the Image Builder validation phase.
-
-A failed validation command causes the AMI build to fail.
+Run after everything above -- the module's fixed steps and any enabled software groups -- so custom commands can build on top of what's already installed.
 
 ---
 
-# Image Builder Resources
+# Pass-Through Fields
 
-The module creates the following AWS resources.
-
-## Image Builder Component
-
-The component contains the build and validation commands.
-
-```text
-Component
-   │
-   ├── Fixed OS update
-   ├── Optional predefined packages
-   ├── Optional Docker
-   ├── Optional AWS CLI
-   ├── Optional Python
-   ├── /opt preparation
-   ├── Caller build commands
-   └── Validation commands
-```
+Everything `ami-builder` exposes for build infrastructure, logging, and distribution passes straight through this module unchanged: `key_pair`, `logging_s3_bucket_name` / `logging_s3_key_prefix`, `resource_tags`, `sns_topic_arn`, `placement_tenancy` / `placement_availability_zone`, `enhanced_image_metadata_enabled`, `root_volume_size`, `root_volume_type`, `component_version`, `recipe_version`, `enable_pipeline` and its related fields, and `build_image` / `build_trigger`. See the `ami-builder` README for what each does -- this module adds no opinion on top of any of them.
 
 ---
 
-## Image Recipe
-
-The recipe defines:
-
-```text
-Parent Ubuntu image
-        +
-Image Builder component
-        +
-Root EBS configuration
-        =
-AMI definition
-```
-
-The recipe is versioned using:
+# Naming Multiple Instances
 
 ```hcl
-recipe_version = "1.0.0"
+image_name = "ubuntu"  # default
 ```
 
----
-
-## Infrastructure Configuration
-
-Image Builder temporarily launches an EC2 instance to construct the AMI.
-
-The caller provides:
-
-```hcl
-instance_types
-instance_profile_name
-subnet_id
-security_group_ids
-```
-
-The temporary build instance is used only during the image build.
-
-It is not the EC2 instance that will run the final workload.
-
-After the build completes, Image Builder terminates the temporary build instance.
-
----
-
-## Distribution Configuration
-
-The distribution configuration controls how the resulting AMI is registered and tagged.
-
-The current module distributes the AMI into the AWS region selected by the Terraform provider.
-
-It controls:
-
-```text
-AMI name
-AMI description
-AMI tags
-AMI distribution region
-```
-
----
-
-# Immediate AMI Build
-
-Use:
-
-```hcl
-build_image = true
-```
-
-to create an Image Builder image resource and immediately start a build.
-
-Example:
-
-```hcl
-build_image   = true
-build_trigger = "build-001"
-```
-
-A subsequent manual build can be requested by changing:
-
-```hcl
-build_trigger = "build-002"
-```
-
-The trigger is simply a Terraform change signal.
-
----
-
-# Image Builder Pipeline
-
-The pipeline is optional.
-
-Enable it with:
-
-```hcl
-enable_pipeline = true
-```
-
-The default schedule is:
-
-```hcl
-pipeline_schedule = "cron(0 3 ? * SUN *)"
-```
-
-This means:
-
-```text
-Every Sunday
-03:00 UTC
-```
-
-The pipeline allows AWS Image Builder to perform recurring image builds without Terraform needing to be executed every week.
-
-The pipeline is useful when the organization wants the golden AMI periodically rebuilt from its current source configuration.
+Passed straight through to `ami-builder`'s own `image_name`. Distinguishes this module's AWS resource names from any other `ami-builder`-based module (called directly, or through a different wrapper) sharing the same `project_name`/`environment` -- avoiding a resource-name collision.
 
 ---
 
 # Versioning
 
-The module uses separate versions for the component and recipe.
+This module follows Semantic Versioning.
 
-## Component Version
+Current release:
+
+```text
+v2.0.0
+```
+
+`v2.0.0` is a **major** release: this module no longer creates any `aws_imagebuilder_*` resource directly -- every one is now created by the `ami-builder` module it calls. For a fresh deployment this is transparent (the resulting AMI, component, and recipe behave identically). For an **existing deployment**, this is a genuine resource re-parenting: Terraform will plan to destroy the old locally-owned resources and create new ones inside the `ami-builder` module call, since they're tracked under entirely different resource addresses (`module.ami_builder.aws_imagebuilder_component.this` instead of `aws_imagebuilder_component.this` at this module's own root).
+
+Before applying v2.0.0 against an existing deployment, migrate state -- note the source addresses use `.base`, this module's original resource labels, not `.this`:
+
+```powershell
+terraform state mv aws_imagebuilder_component.base 'module.ami_builder.aws_imagebuilder_component.this'
+terraform state mv aws_imagebuilder_image_recipe.base 'module.ami_builder.aws_imagebuilder_image_recipe.this'
+terraform state mv aws_imagebuilder_infrastructure_configuration.base 'module.ami_builder.aws_imagebuilder_infrastructure_configuration.this'
+terraform state mv aws_imagebuilder_distribution_configuration.base 'module.ami_builder.aws_imagebuilder_distribution_configuration.this'
+terraform state mv 'aws_imagebuilder_image.base[0]' 'module.ami_builder.aws_imagebuilder_image.this[0]'  # only if build_image = true
+terraform state mv 'aws_imagebuilder_image_pipeline.base[0]' 'module.ami_builder.aws_imagebuilder_image_pipeline.this[0]'  # only if enable_pipeline = true
+```
+
+Then run `terraform plan` and confirm it shows no destroy/recreate actions before applying.
+
+Consumers should pin the module to a released tag:
 
 ```hcl
-component_version = "1.0.0"
-```
-
-Increment this when the Image Builder component changes.
-
-For example:
-
-```text
-1.0.0
-1.0.1
-1.1.0
-2.0.0
+source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.0"
 ```
 
 ---
 
-## Recipe Version
+# License
 
-```hcl
-recipe_version = "1.0.0"
-```
-
-Increment this when the recipe definition changes.
-
-Examples include:
-
-```text
-Parent image
-Root volume size
-Root volume type
-Component configuration
-Recipe configuration
-```
-
----
-
-# Recommended Build Workflow
-
-For a component change:
-
-```text
-Modify component
-      │
-      ▼
-Increment component_version
-      │
-      ▼
-Increment recipe_version if recipe changed
-      │
-      ▼
-terraform fmt -recursive
-      │
-      ▼
-terraform validate
-      │
-      ▼
-Change build_trigger when an immediate rebuild is required
-      │
-      ▼
-terraform plan
-      │
-      ▼
-terraform apply
-```
-
-Version numbers should represent actual configuration changes.
-
-`build_trigger` should represent an intentional request to perform another build.
-
----
-
-# Complete Example
-
-```hcl
-module "ubuntu_ami" {
-  source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v1.1.0"
-
-  project_name = var.project_name
-  environment  = var.environment
-
-  parent_image = var.parent_image
-
-  enable_predefined_packages = true
-  enable_docker              = true
-  enable_aws_cli             = true
-  enable_python              = false
-
-  custom_build_commands = [
-    "mkdir -p /opt/platform"
-  ]
-
-  custom_validate_commands = [
-    "test -d /opt/platform"
-  ]
-
-  component_version = "1.0.0"
-  recipe_version    = "1.0.0"
-
-  root_volume_size = 24
-  root_volume_type = "gp3"
-
-  instance_types        = ["t3.medium"]
-  instance_profile_name = var.instance_profile_name
-  subnet_id             = var.subnet_id
-  security_group_ids    = var.security_group_ids
-
-  build_image   = true
-  build_trigger = "build-001"
-
-  enable_pipeline            = false
-  pipeline_schedule          = "cron(0 3 ? * SUN *)"
-  enable_image_tests         = true
-  image_test_timeout_minutes = 60
-
-  tags = {
-    Project   = "blueprints"
-    ManagedBy = "Terraform"
-  }
-}
-```
-
----
-
-# Responsibility Boundary
-
-## Ubuntu AMI Module
-
-Responsible for:
-
-```text
-Ubuntu foundation
-OS updates
-Predefined utilities
-Optional Docker
-Optional AWS CLI
-Optional Python
-/opt preparation
-Caller-provided AMI build commands
-Caller-provided validation commands
-Image Builder component
-Image Builder recipe
-Build infrastructure
-AMI distribution
-Optional Image Builder pipeline
-AMI testing
-```
-
-## Calling Module
-
-Responsible for:
-
-```text
-VPC
-Subnets
-Security groups
-IAM
-Parent AMI selection
-AMI release decisions
-Workload configuration
-Application deployment
-Secrets
-Databases
-Persistent data
-```
-
----
-
-
-Consumers should reference an immutable release tag:
-
-```hcl
-source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v1.1.0"
-```
-
----
-
-# Module Structure
-
-```text
-terraform-aws-ubuntu-ami/
-│
-├── main.tf
-├── variables.tf
-├── locals.tf
-├── outputs.tf
-├── data.tf
-├── versions.tf
-├── README.md
-├── .gitignore
-│
-└── examples/
-    └── complete/
-        ├── main.tf
-        ├── variables.tf
-        └── outputs.tf
-```
-
-The important architectural change is that **the module now provides controlled building blocks rather than forcing every caller to install the same software**.
-
-For example:
-
-```text
-enable_predefined_packages = true
-enable_docker              = false
-enable_aws_cli             = true
-enable_python              = true
-```
-
-gives the caller a predictable Ubuntu image containing exactly those optional software groups plus the module's fixed foundation steps.
+This module is provided for reusable AWS infrastructure deployments and is intended to be consumed as a versioned Terraform module.

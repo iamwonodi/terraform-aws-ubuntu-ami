@@ -4,9 +4,8 @@
 
 output "component_arn" {
   description = "ARN of the Image Builder component used to customize the base image."
-  value       = aws_imagebuilder_component.base.arn
+  value       = module.ami_builder.component_arn
 }
-
 
 ################################################################################
 # IMAGE RECIPE
@@ -14,9 +13,8 @@ output "component_arn" {
 
 output "recipe_arn" {
   description = "ARN of the Image Builder recipe used to build the base AMI."
-  value       = aws_imagebuilder_image_recipe.base.arn
+  value       = module.ami_builder.recipe_arn
 }
-
 
 ################################################################################
 # BUILD INFRASTRUCTURE
@@ -24,9 +22,8 @@ output "recipe_arn" {
 
 output "infrastructure_configuration_arn" {
   description = "ARN of the Image Builder infrastructure configuration."
-  value       = aws_imagebuilder_infrastructure_configuration.base.arn
+  value       = module.ami_builder.infrastructure_configuration_arn
 }
-
 
 ################################################################################
 # DISTRIBUTION
@@ -34,34 +31,22 @@ output "infrastructure_configuration_arn" {
 
 output "distribution_configuration_arn" {
   description = "ARN of the Image Builder distribution configuration."
-  value       = aws_imagebuilder_distribution_configuration.base.arn
+  value       = module.ami_builder.distribution_configuration_arn
 }
-
 
 ################################################################################
 # BUILT AMI
 ################################################################################
 
 output "ami_id" {
-  description = "AMI ID produced by the Image Builder build. Returns null when build_image is false."
-
-  value = (
-    var.build_image
-    ? try(one(aws_imagebuilder_image.base[0].output_resources).amis[0].image, null)
-    : null
-  )
+  description = "AMI ID produced by the Image Builder build. Null when build_image is false."
+  value       = module.ami_builder.ami_id
 }
 
 output "image_arn" {
-  description = "ARN of the Image Builder image resource. Returns null when build_image is false."
-
-  value = (
-    var.build_image
-    ? aws_imagebuilder_image.base[0].arn
-    : null
-  )
+  description = "ARN of the Image Builder image resource. Null when build_image is false."
+  value       = module.ami_builder.image_arn
 }
-
 
 ################################################################################
 # PIPELINE
@@ -69,9 +54,5 @@ output "image_arn" {
 
 output "pipeline_arn" {
   description = "ARN of the Image Builder pipeline. Null when enable_pipeline is false."
-  value = (
-    var.enable_pipeline
-    ? aws_imagebuilder_image_pipeline.base[0].arn
-    : null
-  )
+  value       = module.ami_builder.pipeline_arn
 }

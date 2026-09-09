@@ -1,36 +1,15 @@
 ################################################################################
 # UBUNTU AMI LOCALS
 #
-# This file assembles the build and validation commands used by the Image
-# Builder component.
-#
-# The caller can enable predefined software groups and can also provide
-# additional custom commands.
+# Assembles the build and validation commands passed to the ami-builder
+# module. ami-builder's component only has a flat build phase and a flat
+# validate phase (a single Bash step each) -- the OS-baseline steps this
+# module used to run as separate named Image Builder phases (system update,
+# /opt preparation, Ubuntu identity check) are folded in here as ordinary
+# commands instead, always first in their respective list.
 ################################################################################
 
 locals {
-  aws_region = data.aws_region.current.region
-
-  component_name = "${var.project_name}-${var.environment}-ubuntu-ami-component"
-
-  recipe_name = "${var.project_name}-${var.environment}-ubuntu-ami-recipe"
-
-  infrastructure_configuration_name = (
-    "${var.project_name}-${var.environment}-ubuntu-ami-build"
-  )
-
-  distribution_configuration_name = (
-    "${var.project_name}-${var.environment}-ubuntu-ami-distribution"
-  )
-
-  pipeline_name = (
-    "${var.project_name}-${var.environment}-ubuntu-ami-pipeline"
-  )
-
-  ami_name = (
-    "${var.project_name}-${var.environment}-ubuntu-compute"
-  )
-
   common_tags = merge(
     var.tags,
     {
@@ -41,10 +20,30 @@ locals {
     }
   )
 
-  ################################################################################
+  ##############################################################################
+  # OS BASELINE (always run, not caller-toggleable)
+  ##############################################################################
+
+  system_update_commands = [
+    "export DEBIAN_FRONTEND=noninteractive",
+    "apt-get update -y",
+    "apt-get upgrade -y",
+  ]
+
+  compute_directory_commands = [
+    "mkdir -p /opt",
+    "chmod 755 /opt",
+  ]
+
+  os_validation_commands = [
+    "test -f /etc/os-release",
+    "grep -q 'Ubuntu' /etc/os-release",
+  ]
+
+  ##############################################################################
   # PREDEFINED UBUNTU PACKAGES
   #
-  # These packages are installed when enable_predefined_packages is true.
+  # Installed when enable_predefined_packages is true.
   #
   # Package purpose:
   #
@@ -59,7 +58,7 @@ locals {
   # ca-certificates - Trusted CA certificates for TLS connections.
   # gnupg          - GPG tooling used to verify package repositories.
   # lsb-release    - Linux distribution information utilities.
-  ################################################################################
+  ##############################################################################
 
   predefined_package_install_commands = var.enable_predefined_packages ? [
     "export DEBIAN_FRONTEND=noninteractive",
@@ -78,12 +77,12 @@ locals {
     "nano --version"
   ] : []
 
-  ################################################################################
+  ##############################################################################
   # DOCKER INSTALLATION
   #
   # Docker is installed from Docker's official Ubuntu repository rather than
   # relying on Ubuntu's distribution package.
-  ################################################################################
+  ##############################################################################
 
   docker_install_commands = var.enable_docker ? [
     "install -m 0755 -d /etc/apt/keyrings",
@@ -103,11 +102,11 @@ locals {
     "systemctl is-enabled docker"
   ] : []
 
-  ################################################################################
+  ##############################################################################
   # AWS CLI INSTALLATION
   #
   # Installs AWS CLI version 2 using the official AWS installer.
-  ################################################################################
+  ##############################################################################
 
   aws_cli_install_commands = var.enable_aws_cli ? [
     "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip",
@@ -121,119 +120,47 @@ locals {
     "aws --version"
   ] : []
 
-  ################################################################################
+  ##############################################################################
   # PYTHON INSTALLATION
   #
-  # Installs PYTHON & its package manager PIP using the apt package manager
-  ################################################################################
+  # Installs Python and its package manager pip using the apt package manager.
+  ##############################################################################
 
   python_commands = var.enable_python ? [
     "export DEBIAN_FRONTEND=noninteractive",
     "apt-get install -y python3 python3-pip python3-venv"
   ] : []
 
-  ################################################################################
-  # COMBINED COMPONENT COMMANDS
+  python_validate_commands = var.enable_python ? [
+    "python3 --version",
+    "python3 -m pip --version",
+    "python3 -m venv --help"
+  ] : []
+
+  ##############################################################################
+  # COMBINED COMMANDS PASSED TO ami-builder
   #
-  # Predefined commands are executed first. Caller-supplied commands are then
-  # executed afterwards so the caller can build on the predefined software.
-  ################################################################################
+  # OS baseline commands run first, then predefined packages, then optional
+  # software groups, then any caller-supplied commands -- so the caller can
+  # build on top of everything this module already installed.
+  ##############################################################################
 
   component_build_commands = concat(
+    local.system_update_commands,
+    local.compute_directory_commands,
     local.predefined_package_install_commands,
     local.docker_install_commands,
     local.aws_cli_install_commands,
     local.python_commands,
-    var.custom_build_commands
+    var.custom_build_commands,
   )
 
   component_validate_commands = concat(
+    local.os_validation_commands,
     local.predefined_package_validate_commands,
     local.docker_validate_commands,
     local.aws_cli_validate_commands,
-    var.custom_validate_commands
-  )
-
-  ################################################################################
-  # IMAGE BUILDER COMPONENT PHASES
-  #
-  # The validate phase is included only when there is at least one validation
-  # command. This prevents Image Builder from receiving an empty validation step.
-  ################################################################################
-
-  component_phases = concat(
-    [
-      {
-        name = "build"
-
-        steps = [
-          {
-            name      = "UpdateSystemPackages"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "export DEBIAN_FRONTEND=noninteractive",
-                "apt-get update -y",
-                "apt-get upgrade -y"
-              ]
-            }
-          },
-
-          {
-            name      = "PrepareComputeDirectories"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "mkdir -p /opt",
-                "chmod 755 /opt"
-              ]
-            }
-          },
-          {
-            name      = "InstallAndConfigureSoftware"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = local.component_build_commands
-            }
-          }
-        ]
-      }
-    ],
-
-    [
-      {
-        name = "validate"
-
-        steps = [
-          {
-            name      = "ValidateUbuntu"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = [
-                "test -f /etc/os-release",
-                "grep -q 'Ubuntu' /etc/os-release"
-              ]
-            }
-          },
-          {
-            name      = "ValidateSoftwareInstallation"
-            action    = "ExecuteBash"
-            onFailure = "Abort"
-
-            inputs = {
-              commands = length(local.component_validate_commands) > 0 ? local.component_validate_commands : ["echo 'No custom validation commands configured.'"]
-            }
-          }
-        ]
-      }
-    ]
+    local.python_validate_commands,
+    var.custom_validate_commands,
   )
 }

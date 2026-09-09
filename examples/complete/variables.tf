@@ -317,3 +317,14 @@ variable "tags" {
     ManagedBy = "Terraform"
   }
 }
+
+variable "logging_bucket_name" {
+  description = "S3 bucket where Image Builder uploads build logs."
+  type        = string
+}
+
+variable "key_pair" {
+  description = "Optional EC2 key pair name for SSH access to the temporary build instance."
+  type        = string
+  default     = null
+}
