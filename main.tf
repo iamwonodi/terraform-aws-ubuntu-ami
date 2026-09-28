@@ -12,7 +12,7 @@
 ################################################################################
 
 module "ami_builder" {
-  source = "git::https://github.com/iamwonodi/terraform-aws-ami-builder.git?ref=v2.0.0"
+  source = "git::https://github.com/iamwonodi/terraform-aws-ami-builder.git?ref=v2.1.0"
 
   project_name = var.project_name
   environment  = var.environment
@@ -27,6 +27,9 @@ module "ami_builder" {
   component_version = var.component_version
   recipe_version    = var.recipe_version
 
+  # Ubuntu's root device. The ami-builder default, /dev/xvda, is Amazon Linux's:
+  # with an Ubuntu parent it added a second volume instead of resizing the root.
+  root_device_name = "/dev/sda1"
   root_volume_size = var.root_volume_size
   root_volume_type = var.root_volume_type
 

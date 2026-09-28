@@ -41,7 +41,7 @@ This module itself creates no AWS resources, so its own provider constraint is n
 
 ```hcl
 module "ubuntu_ami" {
-  source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.0"
+  source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.1"
 
   project_name = "myapp"
   environment  = "production"
@@ -149,8 +149,16 @@ This module follows Semantic Versioning.
 Current release:
 
 ```text
-v2.0.0
+v2.0.1
 ```
+
+`v2.0.1` fixes the image itself; inputs and outputs are unchanged:
+
+* **Docker was never installed.** Docker's repository line was written with `$$(`, which Terraform leaves as it is (it only escapes `$${`) and bash reads as its own process ID, so the line named no real Ubuntu release. It now reads the release from `/etc/os-release`. A plan test rejects `$$` in any command.
+* **Failures no longer pass silently.** It uses `terraform-aws-ami-builder` v2.1.0, whose scripts stop at the first failed command: the failed Docker install used to produce an image anyway.
+* **No stray disk.** It sets the recipe's root device to Ubuntu's `/dev/sda1`. `/dev/xvda` (Amazon Linux's) added a second 24 GiB volume to the image and left the root at 8 GiB.
+
+An image built with `v2.0.0` and `enable_docker = true` has no Docker. Bump the caller's `component_version` and `recipe_version` so Image Builder accepts the new component and recipe.
 
 `v2.0.0` is a **major** release: this module no longer creates any `aws_imagebuilder_*` resource directly -- every one is now created by the `ami-builder` module it calls. For a fresh deployment this is transparent (the resulting AMI, component, and recipe behave identically). For an **existing deployment**, this is a genuine resource re-parenting: Terraform will plan to destroy the old locally-owned resources and create new ones inside the `ami-builder` module call, since they're tracked under entirely different resource addresses (`module.ami_builder.aws_imagebuilder_component.this` instead of `aws_imagebuilder_component.this` at this module's own root).
 
@@ -170,7 +178,7 @@ Then run `terraform plan` and confirm it shows no destroy/recreate actions befor
 Consumers should pin the module to a released tag:
 
 ```hcl
-source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.0"
+source = "git::https://github.com/iamwonodi/terraform-aws-ubuntu-ami.git?ref=v2.0.1"
 ```
 
 ---
